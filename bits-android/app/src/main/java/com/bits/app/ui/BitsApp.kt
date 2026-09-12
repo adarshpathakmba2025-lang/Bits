@@ -37,6 +37,7 @@ import com.bits.app.data.claimBonusTheme
 import com.bits.app.data.withEasterEggUsed
 import com.bits.app.data.withHideHintSeen
 import com.bits.app.data.withHighScore
+import com.bits.app.data.withOnboardingDone
 import com.bits.app.data.withTutorialSeen
 import com.bits.app.ui.theme.BitsColors
 import com.bits.app.ui.theme.BitsText
@@ -49,7 +50,7 @@ sealed interface LaunchRequest {
     data object OpenHome : LaunchRequest
 }
 
-private enum class Screen { Home, Settings, Paywall, GamesHub, Playing }
+private enum class Screen { Onboarding, Home, Settings, Paywall, GamesHub, Playing }
 
 @Composable
 fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
@@ -62,6 +63,18 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
     var selectedCategoryId by rememberSaveable { mutableStateOf(TODAY_ID) }
     var playing by remember { mutableStateOf<GameId?>(null) }
     var showFounder by remember { mutableStateOf(false) }
+    // The founder note is a one-time hello per app run, not a wall in front of every
+    // locked item. After it's been seen, locked things open the Pro page directly.
+    var founderShownThisSession by rememberSaveable { mutableStateOf(false) }
+
+    val openPro: () -> Unit = {
+        if (founderShownThisSession) {
+            screen = Screen.Paywall
+        } else {
+            founderShownThisSession = true
+            showFounder = true
+        }
+    }
 
     // Easter egg: six taps on the "Bits" title, once per device.
     var tapCount by remember { mutableIntStateOf(0) }
@@ -112,7 +125,17 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
     BackHandler(enabled = screen == Screen.Settings || screen == Screen.GamesHub) { screen = Screen.Home }
 
     val current = state
-    val tutorialActive = current != null && !current.preferences.tutorialSeen && screen == Screen.Home
+
+    // New installs are walked through placing the widget before anything else.
+    LaunchedEffect(current?.preferences?.onboardingDone) {
+        val prefs = current?.preferences ?: return@LaunchedEffect
+        if (!prefs.onboardingDone && screen == Screen.Home) screen = Screen.Onboarding
+    }
+
+    val tutorialActive = current != null &&
+        current.preferences.onboardingDone &&
+        !current.preferences.tutorialSeen &&
+        screen == Screen.Home
 
     CompositionLocalProvider(LocalTutorialTargets provides targets) {
         Box(Modifier.fillMaxSize().background(BitsColors.Bg)) {
@@ -127,6 +150,13 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
             } else {
                 Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when (screen) {
+                        Screen.Onboarding -> OnboardingScreen(
+                            onDone = {
+                                repository.edit { it.withOnboardingDone() }
+                                screen = Screen.Home
+                            },
+                        )
+
                         Screen.Home -> HomeScreen(
                             state = current,
                             repository = repository,
@@ -156,7 +186,7 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                             state = current,
                             repository = repository,
                             onBack = { screen = Screen.Home },
-                            onOpenPaywall = { showFounder = true },
+                            onOpenPaywall = openPro,
                             onReplayTour = {
                                 repository.edit { it.withTutorialSeen(false) }
                                 screen = Screen.Home
@@ -180,7 +210,7 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                                 playing = game
                                 screen = Screen.Playing
                             },
-                            onUpgrade = { showFounder = true },
+                            onUpgrade = openPro,
                         )
 
                         Screen.Playing -> {

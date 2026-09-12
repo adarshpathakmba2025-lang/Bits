@@ -54,6 +54,7 @@ fun BitsState.deleteCategory(id: String): BitsState =
         categories = categories.filterNot { it.id == id },
         items = items.filterNot { it.categoryId == id },
         widget = widget.copy(hiddenCategoryIds = widget.hiddenCategoryIds - id),
+        boards = boards.mapValues { (_, s) -> s.copy(hiddenCategoryIds = s.hiddenCategoryIds - id) },
     )
 
 fun BitsState.reorderCategories(orderedIds: List<String>): BitsState {
@@ -64,6 +65,28 @@ fun BitsState.reorderCategories(orderedIds: List<String>): BitsState {
 fun BitsState.setShownOnWidget(categoryId: String, shown: Boolean): BitsState {
     val hidden = if (shown) widget.hiddenCategoryIds - categoryId else widget.hiddenCategoryIds + categoryId
     return copy(widget = widget.copy(hiddenCategoryIds = hidden))
+}
+
+/** Per-board editing. Creating a board copies the shared settings so nothing jumps visually. */
+fun BitsState.editBoard(appWidgetId: Int, transform: (WidgetSettings) -> WidgetSettings): BitsState {
+    if (!preferences.isPro) return this
+    val existing = boards[appWidgetId] ?: widget
+    return copy(boards = boards + (appWidgetId to transform(existing)))
+}
+
+fun BitsState.setShownOnBoard(appWidgetId: Int, categoryId: String, shown: Boolean): BitsState =
+    editBoard(appWidgetId) { settings ->
+        val hidden = if (shown) settings.hiddenCategoryIds - categoryId else settings.hiddenCategoryIds + categoryId
+        settings.copy(hiddenCategoryIds = hidden)
+    }
+
+/** Drops a board so the widget goes back to following the shared settings. */
+fun BitsState.resetBoard(appWidgetId: Int): BitsState = copy(boards = boards - appWidgetId)
+
+/** Removes boards for widgets that are no longer on the home screen. */
+fun BitsState.pruneBoards(livingIds: Set<Int>): BitsState {
+    val kept = boards.filterKeys { it in livingIds }
+    return if (kept.size == boards.size) this else copy(boards = kept)
 }
 
 fun BitsState.withWidgetOpacity(value: Float): BitsState =
@@ -105,6 +128,9 @@ fun BitsState.claimBonusTheme(themeId: String): BitsState {
     if (theme.free) return this
     return copy(preferences = preferences.copy(bonusThemeId = themeId, widgetThemeId = themeId))
 }
+
+fun BitsState.withOnboardingDone(): BitsState =
+    copy(preferences = preferences.copy(onboardingDone = true))
 
 fun BitsState.withEasterEggUsed(): BitsState =
     copy(preferences = preferences.copy(easterEggUsed = true))

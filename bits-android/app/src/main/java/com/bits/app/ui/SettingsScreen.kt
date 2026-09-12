@@ -12,7 +12,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +38,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +60,9 @@ import com.bits.app.data.BitsState
 import com.bits.app.data.ClockStyle
 import com.bits.app.data.ClockStyles
 import com.bits.app.data.WidgetThemes
+import com.bits.app.data.pruneBoards
+import com.bits.app.data.resetBoard
+import com.bits.app.data.setShownOnBoard
 import com.bits.app.data.withAddToBottom
 import com.bits.app.data.withAutoClear
 import com.bits.app.data.withClock
@@ -72,9 +78,11 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-private fun hasPlacedWidget(context: Context): Boolean =
+private fun placedWidgetIds(context: Context): List<Int> =
     AppWidgetManager.getInstance(context)
-        .getAppWidgetIds(ComponentName(context, BitsWidgetReceiver::class.java)).isNotEmpty()
+        .getAppWidgetIds(ComponentName(context, BitsWidgetReceiver::class.java)).sorted()
+
+private fun hasPlacedWidget(context: Context): Boolean = placedWidgetIds(context).isNotEmpty()
 
 private fun requestPinWidget(context: Context) {
     val manager = AppWidgetManager.getInstance(context)
@@ -98,6 +106,7 @@ private fun appVersion(context: Context): String = try {
     ""
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SettingsScreen(
     state: BitsState,
@@ -107,6 +116,8 @@ fun SettingsScreen(
     onReplayTour: () -> Unit,
     onRestorePurchases: () -> Unit,
 ) {
+    var clockPreview by remember { mutableStateOf<String?>(null) }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
@@ -131,7 +142,23 @@ fun SettingsScreen(
 
             SectionLabel("Widget")
             Card {
-                WidgetPreview(state = state, opacity = state.widget.opacity, modifier = Modifier.fillMaxWidth().height(300.dp))
+                WidgetPreview(
+                    state = state,
+                    opacity = state.widget.opacity,
+                    clockOverrideId = clockPreview,
+                    modifier = Modifier.fillMaxWidth().height(300.dp),
+                )
+                if (clockPreview != null) {
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Previewing ${ClockStyles.find(clockPreview!!).displayName}",
+                            style = BitsText.Small.copy(color = BitsColors.Amber),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextAction("Done", BitsColors.Muted) { clockPreview = null }
+                        FilledAction("Unlock", onClick = onOpenPaywall)
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
                 OpacityRow(state, repository)
             }
@@ -144,11 +171,18 @@ fun SettingsScreen(
                 )
                 if (state.widget.showClock) {
                     Divider()
-                    ClockStylePicker(state, repository, onOpenPaywall)
+                    ClockStylePicker(
+                        state = state,
+                        repository = repository,
+                        onOpenPaywall = onOpenPaywall,
+                        onPreviewClock = { clockPreview = it },
+                    )
                 }
             }
             Card { ThemePicker(state, repository, onOpenPaywall) }
             Hint("Tap Edit on the home page to choose which categories appear.")
+
+            BoardsSection(state, repository, onOpenPaywall)
             if (!hasPlacedWidgetRemembered()) {
                 Card {
                     Text("Not on your home screen yet", style = BitsText.Body)
@@ -334,7 +368,7 @@ private fun ProBanner(state: BitsState, onOpenPaywall: () -> Unit) {
                 style = BitsText.Subtitle.copy(color = if (isPro) BitsColors.Ink else BitsColors.Amber),
             )
             Text(
-                text = if (isPro) "See everything you've unlocked" else "Games, themes, clock styles \u00b7 from \u20b9179",
+                text = if (isPro) "See everything you've unlocked" else "Games, themes, widget lists \u00b7 from \u20b9349",
                 style = BitsText.Small,
                 modifier = Modifier.padding(top = 2.dp),
             )
@@ -355,8 +389,14 @@ private fun OpacityRow(state: BitsState, repository: BitsRepository) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ClockStylePicker(state: BitsState, repository: BitsRepository, onOpenPaywall: () -> Unit) {
+private fun ClockStylePicker(
+    state: BitsState,
+    repository: BitsRepository,
+    onOpenPaywall: () -> Unit,
+    onPreviewClock: (String) -> Unit,
+) {
     Text("Clock style", style = BitsText.Body)
     Spacer(Modifier.height(8.dp))
     ClockStyles.all.chunked(2).forEach { pair ->
@@ -374,9 +414,12 @@ private fun ClockStylePicker(state: BitsState, repository: BitsRepository, onOpe
                             color = if (selected) BitsColors.Amber else Color.Transparent,
                             shape = RoundedCornerShape(11.dp),
                         )
-                        .clickable {
-                            if (locked) onOpenPaywall() else repository.edit { it.withClockStyle(style.id) }
-                        }
+                        .combinedClickable(
+                            onClick = {
+                                if (locked) onOpenPaywall() else repository.edit { it.withClockStyle(style.id) }
+                            },
+                            onLongClick = { if (locked) onPreviewClock(style.id) },
+                        )
                         .padding(12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -399,32 +442,67 @@ private fun ClockStylePicker(state: BitsState, repository: BitsRepository, onOpe
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThemePicker(state: BitsState, repository: BitsRepository, onOpenPaywall: () -> Unit) {
+    // Long-pressing a locked theme shows it on the preview above without buying it.
+    var preview by remember { mutableStateOf<String?>(null) }
+
     Text("Widget theme", style = BitsText.Body)
     Text(
-        "Tap to switch. Locked ones open the Pro page.",
+        "Tap to switch. Press and hold a locked one to try it on the preview.",
         style = BitsText.Small,
         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
     )
+
+    val previewing = preview
+    if (previewing != null) {
+        WidgetPreview(
+            state = state,
+            opacity = state.widget.opacity,
+            themeOverrideId = previewing,
+            modifier = Modifier.fillMaxWidth().height(260.dp),
+        )
+        Row(Modifier.padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Previewing ${WidgetThemes.find(previewing).displayName}",
+                style = BitsText.Small.copy(color = BitsColors.Amber),
+                modifier = Modifier.weight(1f),
+            )
+            TextAction("Done", BitsColors.Muted) { preview = null }
+            FilledAction("Unlock", onClick = onOpenPaywall)
+        }
+    }
+
     WidgetThemes.all.chunked(2).forEach { pair ->
         Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pair.forEach { theme ->
                 val usable = state.canUseTheme(theme.id)
-                val selected = state.activeTheme.id == theme.id
+                val selected = state.activeTheme.id == theme.id && preview == null
                 Column(
                     Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(theme.backgroundTint))
                         .border(
-                            width = if (selected) 2.dp else 1.dp,
-                            color = if (selected) Color(theme.accent) else BitsColors.Muted.copy(alpha = 0.2f),
+                            width = if (selected || preview == theme.id) 2.dp else 1.dp,
+                            color = when {
+                                selected || preview == theme.id -> Color(theme.accent)
+                                else -> BitsColors.Muted.copy(alpha = 0.2f)
+                            },
                             shape = RoundedCornerShape(12.dp),
                         )
-                        .clickable {
-                            if (usable) repository.edit { it.withWidgetTheme(theme.id) } else onOpenPaywall()
-                        }
+                        .combinedClickable(
+                            onClick = {
+                                if (usable) {
+                                    preview = null
+                                    repository.edit { it.withWidgetTheme(theme.id) }
+                                } else {
+                                    onOpenPaywall()
+                                }
+                            },
+                            onLongClick = { if (!usable) preview = theme.id },
+                        )
                         .padding(12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,6 +532,107 @@ private fun ThemePicker(state: BitsState, repository: BitsRepository, onOpenPayw
                 }
             }
             if (pair.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * Lets a Pro user give each placed widget its own list. Widgets without a board keep
+ * following the shared settings above, which is what every free user sees.
+ */
+@Composable
+private fun BoardsSection(state: BitsState, repository: BitsRepository, onOpenPaywall: () -> Unit) {
+    val context = LocalContext.current
+    val ids by produceState(initialValue = placedWidgetIds(context)) {
+        while (true) {
+            delay(1500)
+            value = placedWidgetIds(context)
+        }
+    }
+
+    // Forget settings for widgets that have been removed from the home screen.
+    LaunchedEffect(ids) {
+        if (ids.isNotEmpty()) repository.edit { it.pruneBoards(ids.toSet()) }
+    }
+
+    // Nothing to configure until there are at least two widgets out there.
+    if (ids.size < 2 && !state.preferences.isPro) return
+
+    SectionLabel("Separate lists")
+    if (!state.preferences.isPro) {
+        Card {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Give each widget its own list", style = BitsText.Body)
+                    Text(
+                        "You have ${ids.size} widgets. With Pro, each can show different categories.",
+                        style = BitsText.Small,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                Image(painterResource(R.drawable.ic_lock_pixel), contentDescription = "Pro", modifier = Modifier.size(16.dp))
+            }
+            FilledAction("See Pro", modifier = Modifier.padding(top = 12.dp), onClick = onOpenPaywall)
+        }
+        return
+    }
+
+    if (ids.isEmpty()) {
+        Card { Text("Add a widget to your home screen to set this up.", style = BitsText.Small) }
+        return
+    }
+
+    ids.forEachIndexed { index, appWidgetId ->
+        val settings = state.settingsFor(appWidgetId)
+        val custom = state.hasOwnBoard(appWidgetId)
+        Card {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Widget ${index + 1}", style = BitsText.Body)
+                    Text(
+                        text = if (custom) "Its own list" else "Following your main settings",
+                        style = BitsText.Small,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                if (custom) {
+                    TextAction("Reset", BitsColors.Muted) { repository.edit { it.resetBoard(appWidgetId) } }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            WidgetPreview(
+                state = state,
+                opacity = settings.opacity,
+                settings = settings,
+                modifier = Modifier.fillMaxWidth().height(230.dp),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Categories on this widget", style = BitsText.Small)
+            state.sortedCategories.forEach { category ->
+                val shown = category.id !in settings.hiddenCategoryIds
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            repository.edit { it.setShownOnBoard(appWidgetId, category.id, !shown) }
+                        }
+                        .padding(vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = category.name,
+                        style = if (shown) BitsText.Body
+                        else BitsText.Body.copy(color = BitsColors.Muted.copy(alpha = 0.5f)),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (shown) {
+                        Icon(Icons.Filled.Check, contentDescription = null, tint = BitsColors.Amber, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
         }
     }
 }
@@ -549,9 +728,17 @@ private fun DeveloperCard(state: BitsState, repository: BitsRepository) {
 
 /** A faithful copy of the home screen widget. themeOverrideId previews a theme without saving it. */
 @Composable
-fun WidgetPreview(state: BitsState, opacity: Float, themeOverrideId: String? = null, modifier: Modifier = Modifier) {
-    val categories = state.widgetCategories
-    val theme = if (themeOverrideId != null) WidgetThemes.find(themeOverrideId) else state.activeTheme
+fun WidgetPreview(
+    state: BitsState,
+    opacity: Float,
+    themeOverrideId: String? = null,
+    clockOverrideId: String? = null,
+    settings: com.bits.app.data.WidgetSettings? = null,
+    modifier: Modifier = Modifier,
+) {
+    val config = settings ?: state.widget
+    val categories = state.categoriesFor(config)
+    val theme = if (themeOverrideId != null) WidgetThemes.find(themeOverrideId) else state.themeFor(config)
     val accent = Color(theme.accent)
     val done = Color(theme.doneColor)
     val ink = Color(theme.ink)
@@ -567,8 +754,8 @@ fun WidgetPreview(state: BitsState, opacity: Float, themeOverrideId: String? = n
                 .background(Color(theme.backgroundTint).copy(alpha = opacity))
                 .padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 4.dp)
         ) {
-            if (state.widget.showClock) {
-                PreviewClock(state.activeClockStyle.id, ink)
+            if (config.showClock) {
+                PreviewClock(clockOverrideId ?: state.clockStyleFor(config).id, ink)
                 Spacer(Modifier.height(8.dp))
             }
 

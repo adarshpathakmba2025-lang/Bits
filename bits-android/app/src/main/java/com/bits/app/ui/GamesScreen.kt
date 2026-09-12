@@ -54,11 +54,23 @@ fun GamesHubScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Text(
-                    text = "\u201CGames section in a widget list app?\u201D\nYeah, because why not. Haha.",
-                    style = BitsText.PixelBody.copy(color = BitsColors.Muted),
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
+                // The pixel font is wide, so the quote is sized to sit on one line
+                // and the reply is a separate line beneath it, never re-wrapped.
+                Column(Modifier.padding(bottom = 6.dp)) {
+                    Text(
+                        text = "\u201CGames section in a widget list app?\u201D",
+                        style = BitsText.PixelCaption.copy(color = BitsColors.Muted),
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    Text(
+                        text = "Yeah, because why not. Haha.",
+                        style = BitsText.PixelCaption.copy(color = BitsColors.Muted),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
 
             items(GameId.entries) { game ->

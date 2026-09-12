@@ -29,6 +29,9 @@ data class WidgetSettings(
     val showClock: Boolean,
     /** Categories switched off in Edit. New categories are shown by default. */
     val hiddenCategoryIds: Set<String>,
+    /** Empty means "use whatever the app-wide theme is". Only Pro boards set this. */
+    val themeIdOverride: String = "",
+    val clockStyleOverride: String = "",
 ) {
     companion object {
         val Default = WidgetSettings(opacity = 0.72f, showClock = true, hiddenCategoryIds = emptySet())
@@ -54,6 +57,8 @@ data class Preferences(
     val bonusThemeId: String,
     /** Set once the easter egg has been triggered on this device, so it can't repeat. */
     val easterEggUsed: Boolean,
+    /** Set once the user has been walked through placing the widget on their home screen. */
+    val onboardingDone: Boolean,
     val highScores: Map<String, Int>,
 ) {
     companion object {
@@ -67,6 +72,7 @@ data class Preferences(
             hideHintSeen = false,
             bonusThemeId = "",
             easterEggUsed = false,
+            onboardingDone = false,
             highScores = emptyMap(),
         )
     }
@@ -76,15 +82,42 @@ data class BitsState(
     val categories: List<Category>,
     val items: List<Item>,
     val lastRollover: String,
+    /** The shared settings every widget uses unless it has its own board. */
     val widget: WidgetSettings,
+    /**
+     * Per-widget settings, keyed by Android's appWidgetId. Only Pro users create these.
+     * A widget with no entry here simply falls back to [widget], so free users see
+     * every placed widget stay identical, exactly as before.
+     */
+    val boards: Map<Int, WidgetSettings>,
     val preferences: Preferences,
 ) {
     val sortedCategories: List<Category>
         get() = categories.sortedBy { it.order }
 
-    /** Categories that appear on the widget, in the user's order. */
+    /** Categories that appear on the shared widget, in the user's order. */
     val widgetCategories: List<Category>
-        get() = sortedCategories.filter { it.id !in widget.hiddenCategoryIds }
+        get() = categoriesFor(widget)
+
+    fun categoriesFor(settings: WidgetSettings): List<Category> =
+        sortedCategories.filter { it.id !in settings.hiddenCategoryIds }
+
+    /** Settings for one placed widget: its own board if it has one, otherwise the shared config. */
+    fun settingsFor(appWidgetId: Int): WidgetSettings =
+        if (preferences.isPro) boards[appWidgetId] ?: widget else widget
+
+    fun hasOwnBoard(appWidgetId: Int): Boolean = preferences.isPro && boards.containsKey(appWidgetId)
+
+    /** The theme a given widget draws with, honouring a board override when it's allowed. */
+    fun themeFor(settings: WidgetSettings): WidgetTheme {
+        val id = settings.themeIdOverride.ifEmpty { preferences.widgetThemeId }
+        return if (canUseTheme(id)) WidgetThemes.find(id) else WidgetThemes.Classic
+    }
+
+    fun clockStyleFor(settings: WidgetSettings): ClockStyle {
+        val id = settings.clockStyleOverride.ifEmpty { preferences.clockStyleId }
+        return if (canUseClockStyle(id)) ClockStyles.find(id) else ClockStyles.all.first()
+    }
 
     fun itemsIn(categoryId: String): List<Item> =
         items.filter { it.categoryId == categoryId }.sortedBy { it.position }

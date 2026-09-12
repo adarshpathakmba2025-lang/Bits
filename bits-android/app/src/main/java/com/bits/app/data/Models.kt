@@ -53,13 +53,22 @@ data class Preferences(
     val addToBottom: Boolean,
     /** Shown once, the first time a category is hidden from the widget. */
     val hideHintSeen: Boolean,
-    /** The one theme unlocked by the tap easter egg. Empty until it's claimed. */
+    /**
+     * The single reward set unlocked by the tap easter egg: exactly one theme, one game
+     * and one clock style, chosen once. Empty strings mean nothing claimed yet.
+     */
     val bonusThemeId: String,
-    /** Set once the easter egg has been triggered on this device, so it can't repeat. */
+    val bonusGameId: String,
+    val bonusClockId: String,
+    /** Set once the easter egg has been claimed on this device, so it can never repeat. */
     val easterEggUsed: Boolean,
     /** Set once the user has been walked through placing the widget on their home screen. */
     val onboardingDone: Boolean,
     val highScores: Map<String, Int>,
+    /** The daily Word Guess puzzle: which day it was, the guesses made, and the streak. */
+    val wordleDay: Long,
+    val wordleGuesses: List<String>,
+    val wordleStreak: Int,
 ) {
     companion object {
         val Default = Preferences(
@@ -71,9 +80,14 @@ data class Preferences(
             addToBottom = false,
             hideHintSeen = false,
             bonusThemeId = "",
+            bonusGameId = "",
+            bonusClockId = "",
             easterEggUsed = false,
             onboardingDone = false,
             highScores = emptyMap(),
+            wordleDay = 0L,
+            wordleGuesses = emptyList(),
+            wordleStreak = 0,
         )
     }
 }
@@ -131,7 +145,11 @@ data class BitsState(
     }
 
     fun canUseClockStyle(styleId: String): Boolean =
-        ClockStyles.find(styleId).free || preferences.isPro
+        ClockStyles.find(styleId).free || preferences.isPro || preferences.bonusClockId == styleId
+
+    /** Games are identified by the keys in the UI's GameId list. */
+    fun canPlayGame(gameId: String, free: Boolean): Boolean =
+        free || preferences.isPro || preferences.bonusGameId == gameId
 
     /** The theme actually drawn, falling back to Classic if a Pro theme is no longer available. */
     val activeTheme: WidgetTheme
@@ -143,4 +161,7 @@ data class BitsState(
         else ClockStyles.all.first()
 
     fun highScore(gameId: String): Int = preferences.highScores[gameId] ?: 0
+
+    /** True once the whole easter-egg reward has been taken. */
+    val easterEggClaimed: Boolean get() = preferences.easterEggUsed
 }

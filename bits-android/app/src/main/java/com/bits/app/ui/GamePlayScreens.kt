@@ -231,7 +231,11 @@ fun SnakeScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
                     state = Snake.newGame()
                 }
             } else {
-                Text("SWIPE TO TURN", style = BitsText.PixelBody)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Text("SWIPE OR USE THE PAD", style = BitsText.PixelBody)
+                    Spacer(Modifier.height(10.dp))
+                    PixelDpad(onMove = { state = Snake.turn(state, it) })
+                }
             }
         },
     ) {
@@ -567,52 +571,42 @@ fun TicTacToeScreen(onBack: () -> Unit) {
 /* ---------------------------- Word guess ---------------------------- */
 
 @Composable
-fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
-    var streak by remember { mutableIntStateOf(0) }
-    var puzzle by remember { mutableStateOf(Wordle.newPuzzle(0)) }
-    var guesses by remember { mutableStateOf(listOf<String>()) }
-    var current by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf<String?>(null) }
-    var shake by remember { mutableStateOf(0) }
+fun WordleScreen(
+    dayIndex: Long,
+    guesses: List<String>,
+    streak: Int,
+    best: Int,
+    onGuess: (String, Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    val puzzle = remember(dayIndex) { Wordle.puzzleFor(dayIndex) }
+    val answer = puzzle.answer
+    // Only the slots the player types into; hint letters are never part of this.
+    var typed by remember(dayIndex) { mutableStateOf("") }
+    var message by remember(dayIndex) { mutableStateOf<String?>(null) }
+    var shake by remember(dayIndex) { mutableIntStateOf(0) }
     var celebrate by remember { mutableStateOf(false) }
 
-    val answer = puzzle.answer
     val solved = guesses.lastOrNull() == answer
     val out = guesses.size >= Wordle.MAX_GUESSES && !solved
+    val finished = solved || out
+    val slots = remember(dayIndex) { Wordle.editableIndices(puzzle) }
 
     fun submit() {
-        val guess = current.uppercase()
-        if (guess.length < Wordle.LENGTH) return
+        if (finished) return
+        if (!Wordle.isComplete(typed, puzzle)) return
+        val guess = Wordle.assembleGuess(typed, puzzle)
         if (!Wordle.isAcceptable(guess)) {
-            // Clear the row for them rather than making them delete letter by letter.
             message = "Not in word list"
             shake += 1
-            current = ""
+            typed = ""
             return
         }
-        if (!Wordle.matchesHints(guess, puzzle)) {
-            message = "Keep the given letters"
-            shake += 1
-            current = ""
-            return
-        }
-        guesses = guesses + guess
-        current = ""
         message = null
-        if (guess == answer) {
-            streak += 1
-            celebrate = true
-            onScore(streak)
-        }
-    }
-
-    fun nextPuzzle(resetStreak: Boolean) {
-        if (resetStreak) streak = 0
-        puzzle = Wordle.newPuzzle(streak)
-        guesses = emptyList()
-        current = ""
-        message = null
-        celebrate = false
+        typed = ""
+        val won = guess == answer
+        if (won) celebrate = true
+        onGuess(guess, won)
     }
 
     Box {
@@ -622,14 +616,21 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
             best = best,
             onBack = onBack,
             footer = {
-                when {
-                    solved -> GameOverBanner("Got it!") { nextPuzzle(false) }
-                    out -> GameOverBanner("It was $answer") { nextPuzzle(true) }
-                    else -> Text(
-                        text = message?.uppercase()
-                            ?: if (puzzle.revealed.isEmpty()) "NO HINTS THIS TIME" else "SOME LETTERS ARE FREE",
-                        style = BitsText.PixelBody,
-                    )
+                Column(Modifier.fillMaxWidth()) {
+                    when {
+                        solved -> Text(
+                            "SOLVED IN ${guesses.size} \u00b7 NEW WORD TOMORROW",
+                            style = BitsText.PixelBody.copy(color = Arcade.Glow),
+                        )
+                        out -> Text(
+                            "IT WAS $answer \u00b7 NEW WORD TOMORROW",
+                            style = BitsText.PixelBody.copy(color = BitsColors.Danger),
+                        )
+                        else -> Text(
+                            message?.uppercase() ?: "ONE LETTER IS FREE",
+                            style = BitsText.PixelBody,
+                        )
+                    }
                 }
             },
         ) {
@@ -637,7 +638,7 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (rowIndex in 0 until Wordle.MAX_GUESSES) {
                         val guess = guesses.getOrNull(rowIndex)
-                        val isCurrent = rowIndex == guesses.size && !solved && !out
+                        val isCurrent = rowIndex == guesses.size && !finished
                         val marks = guess?.let { Wordle.mark(it, answer) }
                         val nudge by animateFloatAsState(
                             targetValue = shake.toFloat(),
@@ -652,11 +653,12 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
                         ) {
                             for (i in 0 until Wordle.LENGTH) {
                                 val isHint = i in puzzle.revealed
+                                // Where this column sits in the typed string, if it's typeable.
+                                val slotIndex = slots.indexOf(i)
                                 val letter = when {
                                     guess != null -> guess[i].toString()
-                                    isCurrent && i < current.length -> current[i].uppercase()
-                                    // Free letters stay visible on every empty row.
-                                    guess == null && isHint -> answer[i].toString()
+                                    isHint -> answer[i].toString()
+                                    isCurrent && slotIndex in typed.indices -> typed[slotIndex].toString()
                                     else -> ""
                                 }
                                 val fill = when (marks?.getOrNull(i)) {
@@ -665,7 +667,6 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
                                     LetterMark.ABSENT -> Color(0xFF39434F)
                                     null -> if (isHint) Color(0xFF24323F) else Arcade.Panel
                                 }
-                                // Correct letters pop in one after another, left to right.
                                 val pop by animateFloatAsState(
                                     targetValue = if (marks?.getOrNull(i) == LetterMark.CORRECT) 1f else 0f,
                                     animationSpec = tween(260, delayMillis = i * 70),
@@ -676,7 +677,7 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
                                         .weight(1f)
                                         .aspectRatio(1f)
                                         .scale(1f + pop * 0.07f)
-                                        .background(Arcade.Border)
+                                        .background(if (isHint && guess == null) Arcade.Glow else Arcade.Border)
                                         .padding(2.dp)
                                         .background(fill),
                                     contentAlignment = Alignment.Center,
@@ -686,7 +687,7 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
                                         style = BitsText.PixelHeading.copy(
                                             color = when {
                                                 marks != null -> Arcade.Screen
-                                                isHint && guess == null -> Arcade.Glow
+                                                isHint -> Arcade.Glow
                                                 else -> BitsColors.Ink
                                             },
                                         ),
@@ -699,13 +700,21 @@ fun WordleScreen(best: Int, onScore: (Int) -> Unit, onBack: () -> Unit) {
 
                 Spacer(Modifier.weight(1f))
 
-                if (!solved && !out) {
+                if (!finished) {
                     LetterKeyboard(
                         guesses = guesses,
                         answer = answer,
-                        onLetter = { if (current.length < Wordle.LENGTH) current += it },
-                        onDelete = { current = current.dropLast(1) },
+                        onLetter = { if (typed.length < slots.size) typed += it },
+                        onDelete = { typed = typed.dropLast(1) },
                         onEnter = ::submit,
+                    )
+                } else {
+                    // Nothing more to play today; the streak carries into tomorrow.
+                    Text(
+                        text = "COME BACK TOMORROW FOR A NEW PUZZLE",
+                        style = BitsText.PixelBody.copy(color = BitsColors.Muted),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
                     )
                 }
             }

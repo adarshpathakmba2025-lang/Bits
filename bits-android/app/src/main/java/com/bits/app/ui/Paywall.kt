@@ -70,7 +70,7 @@ private val perks = listOf(
     Perk("Four more mini-games", "Memory Match, X and O, Word Guess and Flappy, all unlocked.", R.drawable.ic_game_flappy),
     Perk("Eight widget themes", "Full palettes, not just accent colours. Try any before you buy.", R.drawable.ic_theme),
     Perk("Premium clock styles", "Stacked, monospace, statement and seconds.", R.drawable.ic_clock),
-    Perk("Independent widget lists", "Give each widget its own categories, free of Today and Tomorrow.", R.drawable.ic_widget_add),
+    Perk("Independent widget lists", "Give each widget its own categories.", R.drawable.ic_widget_add),
     Perk("Keeps Bits going", "No ads, no tracking, no subscriptions required. Just this.", R.drawable.ic_heart),
 )
 
@@ -134,7 +134,7 @@ fun PaywallScreen(state: BitsState, onBack: () -> Unit, onPurchase: () -> Unit) 
                 Spacer(Modifier.height(4.dp))
                 PlanCard(
                     title = "Lifetime",
-                    price = "\u20b9349",
+                    price = "\u20b9229",
                     caption = "Pay once. Yours forever.",
                     badge = "BEST VALUE",
                     selected = selectedPlan == "lifetime",
@@ -143,7 +143,7 @@ fun PaywallScreen(state: BitsState, onBack: () -> Unit, onPurchase: () -> Unit) 
                 Spacer(Modifier.height(10.dp))
                 PlanCard(
                     title = "Monthly",
-                    price = "\u20b979",
+                    price = "\u20b949",
                     caption = "Billed monthly. Cancel any time.",
                     badge = null,
                     selected = selectedPlan == "monthly",
@@ -176,7 +176,7 @@ fun PaywallScreen(state: BitsState, onBack: () -> Unit, onPurchase: () -> Unit) 
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = if (selectedPlan == "lifetime") "Get Lifetime \u2014 \u20b9349" else "Start Monthly \u2014 \u20b979",
+                    text = if (selectedPlan == "lifetime") "Get Lifetime \u2014 \u20b9229" else "Start Monthly \u2014 \u20b949",
                     style = BitsText.BodyBold.copy(color = BitsColors.Bg),
                     textAlign = TextAlign.Center,
                     modifier = Modifier

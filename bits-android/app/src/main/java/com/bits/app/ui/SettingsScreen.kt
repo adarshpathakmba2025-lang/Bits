@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,6 +61,7 @@ import com.bits.app.data.BitsState
 import com.bits.app.data.ClockStyle
 import com.bits.app.data.ClockStyles
 import com.bits.app.data.WidgetThemes
+import com.bits.app.data.editBoard
 import com.bits.app.data.pruneBoards
 import com.bits.app.data.resetBoard
 import com.bits.app.data.setShownOnBoard
@@ -156,7 +158,9 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f),
                         )
                         TextAction("Done", BitsColors.Muted) { clockPreview = null }
-                        FilledAction("Unlock", onClick = onOpenPaywall)
+                        if (!state.canUseClockStyle(clockPreview!!)) {
+                            FilledAction("Unlock", onClick = onOpenPaywall)
+                        }
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -368,7 +372,7 @@ private fun ProBanner(state: BitsState, onOpenPaywall: () -> Unit) {
                 style = BitsText.Subtitle.copy(color = if (isPro) BitsColors.Ink else BitsColors.Amber),
             )
             Text(
-                text = if (isPro) "See everything you've unlocked" else "Games, themes, widget lists \u00b7 from \u20b9349",
+                text = if (isPro) "See everything you've unlocked" else "Games, themes, widget lists \u00b7 from \u20b9229",
                 style = BitsText.Small,
                 modifier = Modifier.padding(top = 2.dp),
             )
@@ -398,7 +402,11 @@ private fun ClockStylePicker(
     onPreviewClock: (String) -> Unit,
 ) {
     Text("Clock style", style = BitsText.Body)
-    Spacer(Modifier.height(8.dp))
+    Text(
+        "Press and hold any style to try it on the preview.",
+        style = BitsText.Small,
+        modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+    )
     ClockStyles.all.chunked(2).forEach { pair ->
         Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             pair.forEach { style ->
@@ -418,7 +426,7 @@ private fun ClockStylePicker(
                             onClick = {
                                 if (locked) onOpenPaywall() else repository.edit { it.withClockStyle(style.id) }
                             },
-                            onLongClick = { if (locked) onPreviewClock(style.id) },
+                            onLongClick = { onPreviewClock(style.id) },
                         )
                         .padding(12.dp)
                 ) {
@@ -450,7 +458,7 @@ private fun ThemePicker(state: BitsState, repository: BitsRepository, onOpenPayw
 
     Text("Widget theme", style = BitsText.Body)
     Text(
-        "Tap to switch. Press and hold a locked one to try it on the preview.",
+        "Tap to switch. Press and hold any theme to try it on the preview.",
         style = BitsText.Small,
         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
     )
@@ -470,7 +478,9 @@ private fun ThemePicker(state: BitsState, repository: BitsRepository, onOpenPayw
                 modifier = Modifier.weight(1f),
             )
             TextAction("Done", BitsColors.Muted) { preview = null }
-            FilledAction("Unlock", onClick = onOpenPaywall)
+            if (!state.canUseTheme(previewing)) {
+                FilledAction("Unlock", onClick = onOpenPaywall)
+            }
         }
     }
 
@@ -501,7 +511,7 @@ private fun ThemePicker(state: BitsState, repository: BitsRepository, onOpenPayw
                                     onOpenPaywall()
                                 }
                             },
-                            onLongClick = { if (!usable) preview = theme.id },
+                            onLongClick = { preview = theme.id },
                         )
                         .padding(12.dp)
                 ) {
@@ -583,56 +593,181 @@ private fun BoardsSection(state: BitsState, repository: BitsRepository, onOpenPa
     }
 
     ids.forEachIndexed { index, appWidgetId ->
-        val settings = state.settingsFor(appWidgetId)
-        val custom = state.hasOwnBoard(appWidgetId)
-        Card {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Widget ${index + 1}", style = BitsText.Body)
-                    Text(
-                        text = if (custom) "Its own list" else "Following your main settings",
-                        style = BitsText.Small,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
-                if (custom) {
-                    TextAction("Reset", BitsColors.Muted) { repository.edit { it.resetBoard(appWidgetId) } }
+        BoardCard(
+            index = index,
+            appWidgetId = appWidgetId,
+            state = state,
+            repository = repository,
+            onOpenPaywall = onOpenPaywall,
+        )
+    }
+}
+
+/** Everything one widget can be customised to: its categories, theme, clock and opacity. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BoardCard(
+    index: Int,
+    appWidgetId: Int,
+    state: BitsState,
+    repository: BitsRepository,
+    onOpenPaywall: () -> Unit,
+) {
+    val settings = state.settingsFor(appWidgetId)
+    val custom = state.hasOwnBoard(appWidgetId)
+    var expanded by remember { mutableStateOf(false) }
+    var opacity by remember(settings.opacity) { mutableFloatStateOf(settings.opacity) }
+
+    Card {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Widget ${index + 1}", style = BitsText.Body)
+                Text(
+                    text = if (custom) "Its own list and look" else "Following your main settings",
+                    style = BitsText.Small,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Text(
+                if (expanded) "Hide" else "Customise",
+                style = BitsText.Small.copy(color = BitsColors.Amber),
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+        WidgetPreview(
+            state = state,
+            opacity = opacity,
+            settings = settings,
+            modifier = Modifier.fillMaxWidth().height(230.dp),
+        )
+
+        if (!expanded) return@Card
+
+        Spacer(Modifier.height(14.dp))
+        Text("Categories on this widget", style = BitsText.Small)
+        state.sortedCategories.forEach { category ->
+            val shown = category.id !in settings.hiddenCategoryIds
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { repository.edit { it.setShownOnBoard(appWidgetId, category.id, !shown) } }
+                    .padding(vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = category.name,
+                    style = if (shown) BitsText.Body else BitsText.Body.copy(color = BitsColors.Muted.copy(alpha = 0.5f)),
+                    modifier = Modifier.weight(1f),
+                )
+                if (shown) {
+                    Icon(Icons.Filled.Check, contentDescription = null, tint = BitsColors.Amber, modifier = Modifier.size(16.dp))
                 }
             }
+        }
 
+        Divider()
+        ToggleRow(
+            title = "Show clock",
+            subtitle = null,
+            checked = settings.showClock,
+            onCheckedChange = { on -> repository.edit { it.editBoard(appWidgetId) { b -> b.copy(showClock = on) } } },
+        )
+
+        if (settings.showClock) {
             Spacer(Modifier.height(10.dp))
-            WidgetPreview(
-                state = state,
-                opacity = settings.opacity,
-                settings = settings,
-                modifier = Modifier.fillMaxWidth().height(230.dp),
+            Text("Clock style for this widget", style = BitsText.Small)
+            Spacer(Modifier.height(6.dp))
+            ChipGrid(
+                options = ClockStyles.all.map { it.id to it.displayName },
+                selectedId = state.clockStyleFor(settings).id,
+                isLocked = { !state.canUseClockStyle(it) },
+                onSelect = { id ->
+                    repository.edit { it.editBoard(appWidgetId) { b -> b.copy(clockStyleOverride = id) } }
+                },
+                onLocked = onOpenPaywall,
             )
+        }
 
-            Spacer(Modifier.height(12.dp))
-            Text("Categories on this widget", style = BitsText.Small)
-            state.sortedCategories.forEach { category ->
-                val shown = category.id !in settings.hiddenCategoryIds
+        Divider()
+        Text("Theme for this widget", style = BitsText.Small)
+        Spacer(Modifier.height(6.dp))
+        ChipGrid(
+            options = listOf("" to "Match app") + WidgetThemes.all.map { it.id to it.displayName },
+            selectedId = settings.themeIdOverride,
+            isLocked = { it.isNotEmpty() && !state.canUseTheme(it) },
+            onSelect = { id ->
+                repository.edit { it.editBoard(appWidgetId) { b -> b.copy(themeIdOverride = id) } }
+            },
+            onLocked = onOpenPaywall,
+        )
+
+        OpacitySlider(
+            label = "Background opacity",
+            value = opacity,
+            onValueChange = { value ->
+                opacity = value
+                repository.edit { it.editBoard(appWidgetId) { b -> b.copy(opacity = value) } }
+            },
+        )
+
+        if (custom) {
+            TextAction("Reset this widget to main settings", BitsColors.Muted) {
+                repository.edit { it.resetBoard(appWidgetId) }
+            }
+        }
+    }
+}
+
+/** A compact wrap of selectable chips, used for per-board theme and clock choices. */
+@Composable
+private fun ChipGrid(
+    options: List<Pair<String, String>>,
+    selectedId: String,
+    isLocked: (String) -> Boolean,
+    onSelect: (String) -> Unit,
+    onLocked: () -> Unit,
+) {
+    options.chunked(2).forEach { pair ->
+        Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            pair.forEach { (id, label) ->
+                val locked = isLocked(id)
+                val selected = id == selectedId
                 Row(
                     Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            repository.edit { it.setShownOnBoard(appWidgetId, category.id, !shown) }
-                        }
-                        .padding(vertical = 9.dp),
+                        .weight(1f)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(if (selected) BitsColors.Amber.copy(alpha = 0.16f) else BitsColors.PanelBase)
+                        .clickable { if (locked) onLocked() else onSelect(id) }
+                        .padding(horizontal = 10.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = category.name,
-                        style = if (shown) BitsText.Body
-                        else BitsText.Body.copy(color = BitsColors.Muted.copy(alpha = 0.5f)),
+                        text = label,
+                        style = BitsText.Small.copy(
+                            color = when {
+                                locked -> BitsColors.Muted
+                                selected -> BitsColors.Amber
+                                else -> BitsColors.Ink
+                            }
+                        ),
                         modifier = Modifier.weight(1f),
                     )
-                    if (shown) {
-                        Icon(Icons.Filled.Check, contentDescription = null, tint = BitsColors.Amber, modifier = Modifier.size(16.dp))
+                    if (locked) {
+                        Image(painterResource(R.drawable.ic_lock_pixel), contentDescription = "Pro", modifier = Modifier.size(12.dp))
+                    } else if (selected) {
+                        Icon(Icons.Filled.Check, contentDescription = null, tint = BitsColors.Amber, modifier = Modifier.size(13.dp))
                     }
                 }
             }
+            if (pair.size == 1) Spacer(Modifier.weight(1f))
         }
     }
 }
@@ -736,6 +871,9 @@ fun WidgetPreview(
     settings: com.bits.app.data.WidgetSettings? = null,
     modifier: Modifier = Modifier,
 ) {
+    // The preview only takes over scrolling once tapped. Otherwise a drag that starts
+    // inside it would fight the settings page instead of scrolling it.
+    var interactive by remember { mutableStateOf(false) }
     val config = settings ?: state.widget
     val categories = state.categoriesFor(config)
     val theme = if (themeOverrideId != null) WidgetThemes.find(themeOverrideId) else state.themeFor(config)
@@ -743,8 +881,32 @@ fun WidgetPreview(
     val done = Color(theme.doneColor)
     val ink = Color(theme.ink)
 
-    Box(modifier.clip(RoundedCornerShape(24.dp)).background(BitsColors.HomeWall)) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(BitsColors.HomeWall)
+            .then(
+                if (interactive) Modifier
+                else Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { interactive = true }
+            )
+    ) {
         DotGrid(Modifier.fillMaxSize(), spacing = 14.dp, color = Color(0x17EAE6DA))
+
+        if (!interactive) {
+            Text(
+                text = "Tap to scroll",
+                style = BitsText.Small.copy(color = BitsColors.Ink),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(18.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xCC0C131B))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
 
         Column(
             Modifier
@@ -760,7 +922,10 @@ fun WidgetPreview(
             }
 
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .then(if (interactive) Modifier.verticalScroll(rememberScrollState()) else Modifier)
             ) {
                 if (categories.isEmpty()) {
                     Text("Nothing to show yet.", style = BitsText.WidgetItem.copy(color = BitsColors.Muted))

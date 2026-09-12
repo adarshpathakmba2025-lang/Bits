@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -33,8 +34,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.bits.app.data.BitsRepository
 import com.bits.app.data.TODAY_ID
-import com.bits.app.data.claimBonusTheme
-import com.bits.app.data.withEasterEggUsed
+import com.bits.app.data.ClockStyles
+import com.bits.app.data.WidgetThemes
+import com.bits.app.data.claimEasterEgg
+import com.bits.app.data.startWordleDay
+import com.bits.app.data.withWordleGuess
 import com.bits.app.data.withHideHintSeen
 import com.bits.app.data.withHighScore
 import com.bits.app.data.withOnboardingDone
@@ -82,6 +86,15 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
     var celebrate by remember { mutableStateOf(false) }
 
     var toast by remember { mutableStateOf<String?>(null) }
+    val lastDeleted by repository.lastDeleted.collectAsState()
+
+    // The undo offer is short-lived; after a few seconds the deletion just stands.
+    LaunchedEffect(lastDeleted) {
+        if (lastDeleted != null) {
+            delay(5000)
+            repository.clearUndo()
+        }
+    }
 
     LaunchedEffect(Unit) {
         repository.load()
@@ -93,7 +106,7 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
 
     // Taps run out after a moment, so ordinary taps never accumulate into the egg.
     LaunchedEffect(tapCount) {
-        if (tapCount in 1 until 6) {
+        if (tapCount in 1 until 4) {
             delay(1200)
             tapCount = 0
         }
@@ -167,7 +180,7 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                             onTitleTap = {
                                 if (!current.preferences.easterEggUsed) {
                                     tapCount += 1
-                                    if (tapCount >= 6) {
+                                    if (tapCount >= 4) {
                                         tapCount = 0
                                         showUnlock = true
                                     }
@@ -203,7 +216,7 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                         )
 
                         Screen.GamesHub -> GamesHubScreen(
-                            isPro = current.preferences.isPro,
+                            canPlay = { id, free -> current.canPlayGame(id, free) },
                             highScoreFor = { current.highScore(it) },
                             onBack = { screen = Screen.Home },
                             onPlay = { game ->
@@ -235,11 +248,33 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                                     onBack = back,
                                 )
                                 GameId.TicTacToe -> TicTacToeScreen(onBack = back)
-                                GameId.Wordle -> WordleScreen(
-                                    best = current.highScore(GameId.Wordle.key),
-                                    onScore = { record(GameId.Wordle.key, it) },
-                                    onBack = back,
-                                )
+                                GameId.Wordle -> {
+                                    val day = java.time.LocalDate.now().toEpochDay()
+                                    // A new day wipes the board; a skipped day also breaks the streak.
+                                    LaunchedEffect(day) {
+                                        if (current.preferences.wordleDay != day) {
+                                            val missed = current.preferences.wordleDay != day - 1L &&
+                                                current.preferences.wordleDay != 0L
+                                            repository.edit { it.startWordleDay(day, brokeStreak = missed) }
+                                        }
+                                    }
+                                    if (current.preferences.wordleDay == day) {
+                                        WordleScreen(
+                                            dayIndex = day,
+                                            guesses = current.preferences.wordleGuesses,
+                                            streak = current.preferences.wordleStreak,
+                                            best = current.highScore(GameId.Wordle.key),
+                                            onGuess = { guess, won ->
+                                                repository.edit { s ->
+                                                    val next = s.withWordleGuess(day, guess, won)
+                                                    if (won) next.withHighScore(GameId.Wordle.key, next.preferences.wordleStreak)
+                                                    else next
+                                                }
+                                            },
+                                            onBack = back,
+                                        )
+                                    }
+                                }
                                 GameId.Flappy -> FlappyScreen(
                                     best = current.highScore(GameId.Flappy.key),
                                     onScore = { record(GameId.Flappy.key, it) },
@@ -268,13 +303,16 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                     )
                 }
 
-                if (showUnlock) {
-                    ThemeUnlockDialog(
-                        onPick = { theme ->
-                            repository.edit { it.claimBonusTheme(theme.id).withEasterEggUsed() }
+                if (showUnlock && !current.preferences.easterEggUsed) {
+                    EasterEggDialog(
+                        lockedThemes = WidgetThemes.all.filterNot { it.free },
+                        lockedGames = GameId.entries.filterNot { it.free }.map { it.key to it.title },
+                        lockedClocks = ClockStyles.all.filterNot { it.free }.map { it.id to it.displayName },
+                        onClaim = { themeId, gameId, clockId ->
+                            repository.edit { it.claimEasterEgg(themeId, gameId, clockId) }
                             showUnlock = false
                             celebrate = true
-                            toast = "${theme.displayName} unlocked. Enjoy!"
+                            toast = "Unlocked! Three things are yours to keep."
                         },
                         onDismiss = { showUnlock = false },
                     )
@@ -284,6 +322,14 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                     ConfettiBurst(onFinished = { celebrate = false })
                 }
 
+                UndoBar(
+                    item = lastDeleted,
+                    onUndo = { repository.undoDelete() },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
+                )
+
                 Toast(
                     message = toast,
                     modifier = Modifier
@@ -291,6 +337,35 @@ fun BitsApp(launchRequest: LaunchRequest?, onLaunchHandled: () -> Unit) {
                         .windowInsetsPadding(WindowInsets.safeDrawing),
                 )
             }
+        }
+    }
+}
+
+/** Offers a few seconds to put back whatever was just deleted. */
+@Composable
+private fun UndoBar(item: com.bits.app.data.Item?, onUndo: () -> Unit, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = item != null,
+        enter = fadeIn() + slideInVertically { it / 2 },
+        exit = fadeOut() + slideOutVertically { it / 2 },
+        modifier = modifier,
+    ) {
+        Row(
+            Modifier
+                .padding(20.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(BitsColors.PanelBase)
+                .padding(start = 16.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Deleted “${item?.text.orEmpty().take(28)}”",
+                style = BitsText.Small.copy(color = BitsColors.Ink),
+                maxLines = 1,
+                modifier = Modifier.weight(1f).padding(vertical = 13.dp),
+            )
+            TextAction("Undo", BitsColors.Amber, onUndo)
         }
     }
 }

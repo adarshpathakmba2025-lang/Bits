@@ -34,6 +34,19 @@ fun BitsState.editItem(id: String, text: String): BitsState =
 fun BitsState.deleteItem(id: String): BitsState =
     copy(items = items.filterNot { it.id == id })
 
+/**
+ * Puts a deleted item back exactly where it was, nudging anything that has since taken
+ * its slot. Safe to call twice: if the item is already present, nothing changes.
+ */
+fun BitsState.restoreItem(item: Item): BitsState {
+    if (items.any { it.id == item.id }) return this
+    if (categories.none { it.id == item.categoryId }) return this
+    val shifted = items.map {
+        if (it.categoryId == item.categoryId && it.position >= item.position) it.copy(position = it.position + 1) else it
+    }
+    return copy(items = shifted + item)
+}
+
 fun BitsState.reorderItems(orderedIds: List<String>): BitsState {
     val positions = orderedIds.withIndex().associate { (index, id) -> id to index }
     return copy(items = items.map { item -> positions[item.id]?.let { item.copy(position = it) } ?: item })
@@ -121,16 +134,71 @@ fun BitsState.withHighScore(gameId: String, score: Int): BitsState =
     if (score <= highScore(gameId)) this
     else copy(preferences = preferences.copy(highScores = preferences.highScores + (gameId to score)))
 
-/** Claims the easter-egg theme. Only ever works once per device. */
-fun BitsState.claimBonusTheme(themeId: String): BitsState {
+/**
+ * Claims the entire easter-egg reward in one shot: one theme, one game, one clock style.
+ *
+ * Deliberately all-or-nothing and one-way. It refuses outright if the egg has already
+ * been claimed, if any bonus slot is already filled, or if any chosen item is a free one
+ * (which would waste the pick). Because it is a single atomic edit, there is no window
+ * in which a caller could claim a theme, then come back later for a second game.
+ */
+fun BitsState.claimEasterEgg(themeId: String, gameId: String, clockId: String): BitsState {
+    if (preferences.easterEggUsed) return this
     if (preferences.bonusThemeId.isNotEmpty()) return this
-    val theme = WidgetThemes.find(themeId)
+    if (preferences.bonusGameId.isNotEmpty()) return this
+    if (preferences.bonusClockId.isNotEmpty()) return this
+
+    // Every pick must be a real locked item, and must actually exist.
+    val theme = WidgetThemes.all.firstOrNull { it.id == themeId } ?: return this
     if (theme.free) return this
-    return copy(preferences = preferences.copy(bonusThemeId = themeId, widgetThemeId = themeId))
+    val clock = ClockStyles.all.firstOrNull { it.id == clockId } ?: return this
+    if (clock.free) return this
+    if (gameId.isBlank()) return this
+
+    return copy(
+        preferences = preferences.copy(
+            bonusThemeId = theme.id,
+            bonusGameId = gameId,
+            bonusClockId = clock.id,
+            easterEggUsed = true,
+            widgetThemeId = theme.id,
+        )
+    )
 }
+
+/** Starts a fresh day's Word Guess, clearing yesterday's board. */
+fun BitsState.startWordleDay(dayIndex: Long, brokeStreak: Boolean): BitsState =
+    copy(
+        preferences = preferences.copy(
+            wordleDay = dayIndex,
+            wordleGuesses = emptyList(),
+            wordleStreak = if (brokeStreak) 0 else preferences.wordleStreak,
+        )
+    )
+
+fun BitsState.withWordleGuess(dayIndex: Long, guess: String, solved: Boolean): BitsState =
+    copy(
+        preferences = preferences.copy(
+            wordleDay = dayIndex,
+            wordleGuesses = preferences.wordleGuesses + guess,
+            wordleStreak = if (solved) preferences.wordleStreak + 1 else preferences.wordleStreak,
+        )
+    )
 
 fun BitsState.withOnboardingDone(): BitsState =
     copy(preferences = preferences.copy(onboardingDone = true))
 
-fun BitsState.withEasterEggUsed(): BitsState =
-    copy(preferences = preferences.copy(easterEggUsed = true))
+/**
+ * Entitlements belong to this device, not to a backup file. Restoring brings back
+ * lists, categories and widget settings, but never Pro or easter-egg unlocks, so a
+ * hand-edited backup can't be used to grant them.
+ */
+fun BitsState.withEntitlementsFrom(device: BitsState): BitsState = copy(
+    preferences = preferences.copy(
+        isPro = device.preferences.isPro,
+        bonusThemeId = device.preferences.bonusThemeId,
+        bonusGameId = device.preferences.bonusGameId,
+        bonusClockId = device.preferences.bonusClockId,
+        easterEggUsed = device.preferences.easterEggUsed,
+    )
+)

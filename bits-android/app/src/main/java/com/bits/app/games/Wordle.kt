@@ -4,14 +4,19 @@ import kotlin.random.Random
 
 enum class LetterMark { CORRECT, PRESENT, ABSENT }
 
-/** One puzzle: the answer plus the positions revealed for free at the start. */
-data class WordPuzzle(val answer: String, val revealed: Set<Int>)
+/**
+ * One day's puzzle. [revealed] positions are given away for free and are never typed
+ * by the player, so a guess is always assembled from the hints plus the typed letters.
+ */
+data class WordPuzzle(val dayIndex: Long, val answer: String, val revealed: Set<Int>)
 
 object Wordle {
     const val LENGTH = 5
     const val MAX_GUESSES = 6
 
-    /** A built-in list keeps the game fully offline. */
+    /** One free letter keeps it a notch above easy without giving the word away. */
+    private const val HINTS = 1
+
     val answers = listOf(
         "APPLE", "BRAVE", "CRANE", "DRIFT", "EAGER", "FLAME", "GRAPE", "HOUSE",
         "IVORY", "JOLLY", "KNEEL", "LEMON", "MANGO", "NOBLE", "OCEAN", "PIANO",
@@ -29,38 +34,62 @@ object Wordle {
         "NYLON", "ONION", "PATCH", "RAVEN", "SOLAR", "TOWEL", "VAULT", "WOVEN",
         "ALBUM", "BLAZE", "COMET", "DIZZY", "EXTRA", "FROWN", "GAUGE", "HUMID",
         "IRONY", "JUMBO", "LEAPT", "MIRTH", "NOVEL", "PLANK", "QUOTA", "ROAST",
-        "SWIRL", "TREND", "USHER", "VIGOR", "WRIST", "YEAST", "ZEBUS", "ARROW",
-        "BERRY", "CIDER", "DWELL", "ELECT", "FIBER", "GLOBE", "HATCH", "INPUT",
+        "SWIRL", "TREND", "USHER", "VIGOR", "WRIST", "YEAST", "ARROW", "BERRY",
+        "CIDER", "DWELL", "ELECT", "FIBER", "GLOBE", "HATCH", "INPUT", "BLINK",
+        "CRISP", "DODGE", "EAGLE", "FAULT", "GRAVY", "HINGE", "IGLOO", "JOINT",
+        "KNIFE", "LYRIC", "MEDAL", "NUDGE", "OPERA", "PIVOT", "QUILL", "RHYME",
+        "SCARF", "TORCH", "UNWED", "VENUE", "WALTZ", "YOUTH", "ZILCH", "ABIDE",
+        "BOUGH", "CHIME", "DRAWN", "ETHIC", "FLOAT", "GUILD", "HUMOR", "IDEAL",
+        "JAUNT", "KRAFT", "LOYAL", "MOTIF", "NINJA", "OZONE", "PROBE", "QUAKE",
+        "RELIC", "SHEEP", "TEMPO", "UNCLE", "VISTA", "WHEAT", "YODEL", "ZONES",
+        "BISON", "CANDY", "DEPTH", "EMPTY", "FERRY", "GRAIN", "HEDGE", "ISSUE",
+        "JELLY", "KNOTS", "LEDGE", "MARSH", "NOISE", "OUGHT", "PUNCH", "QUERY",
+        "ROUND", "SHELF", "TRAIL", "UNITE", "VOICE", "WEAVE", "YEARN", "ZEBEC",
     )
 
     private val valid = answers.toSet()
 
-    fun randomAnswer(random: Random = Random.Default): String = answers[random.nextInt(answers.size)]
+    /** Days since the epoch, the same for everyone in a given local day. */
+    fun todayIndex(epochDay: Long): Long = epochDay
 
     /**
-     * Builds a puzzle with a couple of letters already shown, so a blank grid never
-     * feels like a cold guess. Easier puzzles reveal more; [difficulty] counts up
-     * from 0 as the player's streak grows.
+     * The puzzle for a given day. Fully deterministic, so the same day always gives the
+     * same word and the same hint positions, but both move around from day to day.
      */
-    fun newPuzzle(difficulty: Int = 0, random: Random = Random.Default): WordPuzzle {
-        val answer = randomAnswer(random)
-        val hints = when {
-            difficulty <= 0 -> 2
-            difficulty <= 2 -> 1
-            else -> 0
-        }
-        val positions = (0 until LENGTH).shuffled(random).take(hints).toSet()
-        return WordPuzzle(answer, positions)
+    fun puzzleFor(dayIndex: Long): WordPuzzle {
+        // Mixing the day index keeps consecutive days from picking neighbouring words.
+        val seed = dayIndex * 0x9E3779B97F4A7C15uL.toLong()
+        val random = Random(seed)
+        val answer = answers[((dayIndex * 7919L).mod(answers.size.toLong())).toInt()]
+        val revealed = (0 until LENGTH).shuffled(random).take(HINTS).toSet()
+        return WordPuzzle(dayIndex, answer, revealed)
     }
 
     fun isAcceptable(guess: String): Boolean =
         guess.length == LENGTH && guess.uppercase() in valid
 
-    /** True when a guess respects every freely revealed letter. */
-    fun matchesHints(guess: String, puzzle: WordPuzzle): Boolean =
-        puzzle.revealed.all { index ->
-            guess.length > index && guess[index].uppercaseChar() == puzzle.answer[index]
+    /** Positions the player actually types into, left to right. */
+    fun editableIndices(puzzle: WordPuzzle): List<Int> =
+        (0 until LENGTH).filterNot { it in puzzle.revealed }
+
+    /**
+     * Builds the full guess from the letters the player typed plus the free letters.
+     * Typed input only ever covers the editable slots, so a hint can't be overwritten.
+     */
+    fun assembleGuess(typed: String, puzzle: WordPuzzle): String {
+        val slots = editableIndices(puzzle)
+        val chars = CharArray(LENGTH)
+        for (i in 0 until LENGTH) {
+            chars[i] = if (i in puzzle.revealed) puzzle.answer[i] else ' '
         }
+        typed.forEachIndexed { index, ch ->
+            if (index < slots.size) chars[slots[index]] = ch.uppercaseChar()
+        }
+        return chars.concatToString()
+    }
+
+    fun isComplete(typed: String, puzzle: WordPuzzle): Boolean =
+        typed.length >= editableIndices(puzzle).size
 
     /**
      * Standard Wordle marking. A letter is only marked PRESENT if the answer still has
